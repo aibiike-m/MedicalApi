@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using MedicalApi.Models;
+using MedicalApi.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace MedicalApi.Controllers;
 
@@ -7,17 +9,18 @@ namespace MedicalApi.Controllers;
 [Route("api/[controller]")]
 public class PatientsController : ControllerBase
 {
-    public static List<Patient> Patients = new List<Patient>
+    private readonly MedicalDbContext _db;
+
+    public PatientsController(MedicalDbContext db)
     {
-        new Patient { Id = 1, Name = "Alice", BirthDate = new DateTime(2000, 5, 15), Phone = "+996555123456", HasInsurance = true },
-        new Patient { Id = 2, Name = "Timur", BirthDate = new DateTime(1995, 8, 22), Phone = "+996700987654", HasInsurance = false }
-    };
+        _db = db;
+    }
 
     private string? ValidatePatient(Patient patient)
     {
         if (string.IsNullOrWhiteSpace(patient.Name))
             return "Patient name cannot be empty.";
-        if (patient.BirthDate > DateTime.Now)
+        if (patient.BirthDate > DateOnly.FromDateTime(DateTime.UtcNow))
             return "Birth date cannot be in the future.";
         if (string.IsNullOrWhiteSpace(patient.Phone))
             return "Phone number is required.";
@@ -26,17 +29,17 @@ public class PatientsController : ControllerBase
 
     [HttpGet]
     [ProducesResponseType(typeof(List<Patient>), 200)]
-    public ActionResult<List<Patient>> GetAll()
+    public async Task<ActionResult<List<Patient>>> GetAll()
     {
-        return Ok(Patients);
+        return Ok(await _db.Patients.ToListAsync());
     }
 
     [HttpGet("{id}")]
     [ProducesResponseType(typeof(Patient), 200)]
     [ProducesResponseType(404)]
-    public ActionResult<Patient> GetById(int id)
+    public async Task<ActionResult<Patient>> GetById(int id)
     {
-        var patient = Patients.FirstOrDefault(p => p.Id == id);
+        var patient = await _db.Patients.FirstOrDefaultAsync(p => p.Id == id);
         if (patient == null) return NotFound("Patient not found.");
         return Ok(patient);
     }
@@ -44,13 +47,14 @@ public class PatientsController : ControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(Patient), 201)]
     [ProducesResponseType(400)]
-    public ActionResult<Patient> Create(Patient patient)
+    public async Task<ActionResult<Patient>> Create(Patient patient)
     {
         var error = ValidatePatient(patient);
         if (error != null) return BadRequest(error);
 
-        patient.Id = Patients.Any() ? Patients.Max(p => p.Id) + 1 : 1;
-        Patients.Add(patient);
+        // ID больше не вычисляем вручную, его выдает база (SERIAL)
+        _db.Patients.Add(patient);
+        await _db.SaveChangesAsync();
 
         return CreatedAtAction(nameof(GetById), new { id = patient.Id }, patient);
     }
@@ -59,9 +63,9 @@ public class PatientsController : ControllerBase
     [ProducesResponseType(typeof(Patient), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(404)]
-    public ActionResult<Patient> Update(int id, Patient updatedPatient)
+    public async Task<ActionResult<Patient>> Update(int id, Patient updatedPatient)
     {
-        var patient = Patients.FirstOrDefault(p => p.Id == id);
+        var patient = await _db.Patients.FirstOrDefaultAsync(p => p.Id == id);
         if (patient == null) return NotFound("Patient not found.");
 
         var error = ValidatePatient(updatedPatient);
@@ -72,30 +76,32 @@ public class PatientsController : ControllerBase
         patient.Phone = updatedPatient.Phone;
         patient.HasInsurance = updatedPatient.HasInsurance;
 
+        await _db.SaveChangesAsync();
         return Ok(patient);
     }
 
     [HttpDelete("{id}")]
     [ProducesResponseType(204)]
     [ProducesResponseType(404)]
-    public ActionResult Delete(int id)
+    public async Task<ActionResult> Delete(int id)
     {
-        var patient = Patients.FirstOrDefault(p => p.Id == id);
+        var patient = await _db.Patients.FirstOrDefaultAsync(p => p.Id == id);
         if (patient == null) return NotFound("Patient not found.");
 
-        Patients.Remove(patient);
+        _db.Patients.Remove(patient);
+        await _db.SaveChangesAsync();
         return NoContent();
     }
 
     [HttpGet("{id}/spravki")]
     [ProducesResponseType(typeof(List<Spravka>), 200)]
     [ProducesResponseType(404)]
-    public ActionResult<List<Spravka>> GetSpravki(int id)
+    public async Task<ActionResult<List<Spravka>>> GetSpravki(int id)
     {
-        var patient = Patients.FirstOrDefault(p => p.Id == id);
-        if (patient == null) return NotFound("Patient not found.");
+        var patientExists = await _db.Patients.AnyAsync(p => p.Id == id);
+        if (!patientExists) return NotFound("Patient not found.");
 
-        var patientSpravki = SpravkiController.Spravki.Where(s => s.PatientId == id).ToList();
+        var patientSpravki = await _db.Spravki.Where(s => s.PatientId == id).ToListAsync();
         return Ok(patientSpravki);
     }
 }

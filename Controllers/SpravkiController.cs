@@ -1,91 +1,99 @@
 using Microsoft.AspNetCore.Mvc;
 using MedicalApi.Models;
+using MedicalApi.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace MedicalApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class SpravkaTypesController : ControllerBase
+public class SpravkiController : ControllerBase
 {
-    public static List<SpravkaType> Types = new List<SpravkaType>
-    {
-        new SpravkaType { Id = 1, Name = "Medical Certificate 083", Price = 100, ValidityDays = 30, RequiresDoctorExam = true },
-        new SpravkaType { Id = 2, Name = "Sanitary Booklet", Price = 750, ValidityDays = 365, RequiresDoctorExam = true },
-        new SpravkaType { Id = 3, Name = "Pool Health Clearance", Price = 250, ValidityDays = 90, RequiresDoctorExam = false },
-        new SpravkaType { Id = 4, Name = "Driver's License Certificate", Price = 1200, ValidityDays = 365, RequiresDoctorExam = true }
-    };
+    private readonly MedicalDbContext _db;
 
-    private string? ValidateType(SpravkaType type)
+    public SpravkiController(MedicalDbContext db)
     {
-        if (string.IsNullOrWhiteSpace(type.Name))
-            return "Certificate type name cannot be empty.";
-        if (type.Price <= 0)
-            return "Price must be greater than zero.";
-        if (type.ValidityDays <= 0)
-            return "Validity period must be greater than 0 days.";
-        return null;
+        _db = db;
     }
 
     [HttpGet]
-    [ProducesResponseType(typeof(List<SpravkaType>), 200)]
-    public ActionResult<List<SpravkaType>> GetAll()
+    [ProducesResponseType(typeof(List<Spravka>), 200)]
+    public async Task<ActionResult<List<Spravka>>> GetAll([FromQuery] int? patientId)
     {
-        return Ok(Types);
+        if (patientId.HasValue)
+        {
+            var filtered = await _db.Spravki.Where(s => s.PatientId == patientId.Value).ToListAsync();
+            return Ok(filtered);
+        }
+        return Ok(await _db.Spravki.ToListAsync());
     }
 
     [HttpGet("{id}")]
-    [ProducesResponseType(typeof(SpravkaType), 200)]
+    [ProducesResponseType(typeof(Spravka), 200)]
     [ProducesResponseType(404)]
-    public ActionResult<SpravkaType> GetById(int id)
+    public async Task<ActionResult<Spravka>> GetById(int id)
     {
-        var spravkaType = Types.FirstOrDefault(t => t.Id == id);
-        if (spravkaType == null) return NotFound("Certificate type not found.");
-        return Ok(spravkaType);
+        Spravka? spravka = await _db.Spravki.FirstOrDefaultAsync(s => s.Id == id);
+        if (spravka == null) return NotFound("Certificate not found.");
+        return Ok(spravka);
     }
 
     [HttpPost]
-    [ProducesResponseType(typeof(SpravkaType), 201)]
+    [ProducesResponseType(typeof(Spravka), 201)]
     [ProducesResponseType(400)]
-    public ActionResult<SpravkaType> Create(SpravkaType spravkaType)
+    public async Task<ActionResult<Spravka>> Create(Spravka spravka)
     {
-        var error = ValidateType(spravkaType);
-        if (error != null) return BadRequest(error);
+        // Проверяем через базу, существует ли пациент
+        var patientExists = await _db.Patients.AnyAsync(p => p.Id == spravka.PatientId);
+        if (!patientExists)
+            return BadRequest("Specified patient does not exist.");
 
-        spravkaType.Id = Types.Any() ? Types.Max(t => t.Id) + 1 : 1;
-        Types.Add(spravkaType);
+        // Проверяем через базу, существует ли тип справки
+        var typeExists = await _db.SpravkaTypes.AnyAsync(t => t.Id == spravka.SpravkaTypeId);
+        if (!typeExists)
+            return BadRequest("Specified certificate type not found in catalog.");
 
-        return CreatedAtAction(nameof(GetById), new { id = spravkaType.Id }, spravkaType);
+        spravka.IssueDate = DateTime.UtcNow;
+        _db.Spravki.Add(spravka);
+        await _db.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(GetById), new { id = spravka.Id }, spravka);
     }
 
     [HttpPut("{id}")]
-    [ProducesResponseType(typeof(SpravkaType), 200)]
+    [ProducesResponseType(typeof(Spravka), 200)]
     [ProducesResponseType(400)]
     [ProducesResponseType(404)]
-    public ActionResult<SpravkaType> Update(int id, SpravkaType updatedType)
+    public async Task<ActionResult<Spravka>> Update(int id, Spravka updatedSpravka)
     {
-        var spravkaType = Types.FirstOrDefault(t => t.Id == id);
-        if (spravkaType == null) return NotFound("Certificate type not found.");
+        Spravka? spravka = await _db.Spravki.FirstOrDefaultAsync(s => s.Id == id);
+        if (spravka == null) return NotFound("Certificate not found.");
 
-        var error = ValidateType(updatedType);
-        if (error != null) return BadRequest(error);
+        var patientExists = await _db.Patients.AnyAsync(p => p.Id == updatedSpravka.PatientId);
+        if (!patientExists)
+            return BadRequest("Specified patient does not exist.");
 
-        spravkaType.Name = updatedType.Name;
-        spravkaType.Price = updatedType.Price;
-        spravkaType.ValidityDays = updatedType.ValidityDays;
-        spravkaType.RequiresDoctorExam = updatedType.RequiresDoctorExam;
+        var typeExists = await _db.SpravkaTypes.AnyAsync(t => t.Id == updatedSpravka.SpravkaTypeId);
+        if (!typeExists)
+            return BadRequest("Specified certificate type not found in catalog.");
 
-        return Ok(spravkaType);
+        spravka.PatientId = updatedSpravka.PatientId;
+        spravka.SpravkaTypeId = updatedSpravka.SpravkaTypeId;
+
+        await _db.SaveChangesAsync();
+        return Ok(spravka);
     }
 
     [HttpDelete("{id}")]
     [ProducesResponseType(204)]
     [ProducesResponseType(404)]
-    public ActionResult Delete(int id)
+    public async Task<ActionResult> Delete(int id)
     {
-        var spravkaType = Types.FirstOrDefault(t => t.Id == id);
-        if (spravkaType == null) return NotFound("Certificate type not found.");
+        Spravka? spravka = await _db.Spravki.FirstOrDefaultAsync(s => s.Id == id);
+        if (spravka == null) return NotFound("Certificate not found.");
 
-        Types.Remove(spravkaType);
+        _db.Spravki.Remove(spravka);
+        await _db.SaveChangesAsync();
         return NoContent();
     }
 }
